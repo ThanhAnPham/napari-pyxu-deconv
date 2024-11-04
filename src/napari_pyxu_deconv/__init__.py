@@ -8,8 +8,5 @@ __all__ = (
     "napari_get_reader",
     "write_single_image",
     "write_multiple",
-    "ExampleQWidget",
-    "ImageThreshold",
-    "threshold_autogenerate_widget",
-    "threshold_magic_widget",
+    "Deconvolution",
 )
