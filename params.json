@@ -1,0 +1,22 @@
+{
+  "method": "RL",
+  "gpu": 0,
+  "bufferwidth": [3,3,1],
+  "coi": 0,
+  "Nepoch": 50,
+  "disp": 10,
+  "psf_roi": [
+    -1,
+    -1,
+    64,
+    64
+  ],
+  "roi": [
+    0,
+    0,
+    null,
+    null
+  ],
+  "config_GARL": "airyscan_params"
+  
+}
