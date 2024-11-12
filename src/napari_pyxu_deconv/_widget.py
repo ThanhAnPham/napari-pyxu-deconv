@@ -288,8 +288,6 @@ class Deconvolution(Container):
             labels=False,
         )
 
-        #TODO: Add a button to run deconvolution. Need to import pyxudeconv and run deconvolve
-
         self._run_layer = widgets.PushButton(
             name='run',
             label='Start deconvolution',
@@ -310,6 +308,7 @@ class Deconvolution(Container):
             self._roi_layer,
             self._psfroi_layer,
             self._method_layer,
+            self._run_layer,
         ])
         self.clear()
         self.extend(self.static_container)
@@ -339,11 +338,25 @@ class Deconvolution(Container):
         param['create_fname'] = lambda x, y, z: self.create_fname(
             x, y, self._image_layer_meas.name, z)
         param['save_results'] = self.save_results
-        ims = pd.deconvolve(param)
-        #create image layer
+        pd.deconvolve(param)
+        show_info(f'Deconvolution with {self._method_layer.value} done!')
 
     def save_results(self, vol, fname, pxsz, unit):
-        self._viewer.add_image(vol)
+        """Add results to the Napari Viewer
+
+        Args:
+            vol (numpy.ndarray or cupy.ndarray): volume
+            fname (str): File name
+            pxsz (tuple of float): pixel size (tuple of 3)
+            unit (str): unit of pixel size
+        """
+        self._viewer.add_image(
+            vol,
+            name=fname,
+            scale=pxsz,
+            units=unit,
+        )
+
     def create_fname(
         self,
         meth,
@@ -351,6 +364,17 @@ class Deconvolution(Container):
         fid,
         metric=-np.inf,
     ):
+        """Create a filename
+
+        Args:
+            meth (str): Method name
+            paramstr (str): Method Parameters
+            fid (str): File ID (e.g., image layer name)
+            metric (float, optional): Metric value if phantom exists. Defaults to -np.inf.
+
+        Returns:
+            _type_: _description_
+        """
         if np.isinf(metric) and metric < 0:
             return f'{meth}_{fid}_{paramstr}'
         else:
