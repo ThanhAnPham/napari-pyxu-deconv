@@ -29,8 +29,8 @@ import json
 import torch
 import pyxudeconv as pd
 import numpy as np
-#if TYPE_CHECKING:
-import napari
+if TYPE_CHECKING:
+    import napari
 #debug
 from napari.utils.notifications import show_info
 
