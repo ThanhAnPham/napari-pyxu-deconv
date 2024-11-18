@@ -26,15 +26,20 @@ from magicgui.widgets import Container, create_widget
 from skimage.util import img_as_float
 import os
 import json
-import torch
 import pyxudeconv as pd
 import numpy as np
+import pathlib
 if TYPE_CHECKING:
     import napari
 #debug
 from napari.utils.notifications import show_info
+from argparse import Namespace
 
-NGPU = torch.cuda.device_count()
+import cupy as cp
+
+NGPU = cp.cuda.runtime.getDeviceCount()
+
+#NGPU = torch.cuda.device_count()
 
 
 # if we want even more control over our widget, we can use
@@ -42,8 +47,6 @@ NGPU = torch.cuda.device_count()
 class Deconvolution(Container):
     """Deconvolution class for Napari
 
-    Args:
-        Container (_type_): 
     """
 
     def __init__(self, viewer: "napari.viewer.Viewer"):
@@ -75,10 +78,16 @@ class Deconvolution(Container):
             options=opts_file_edit,
         )
         self._param_layer.changed.connect(self._on_param_file_change)
+        self._run_layer = widgets.PushButton(
+            name='run',
+            label='Start deconvolution',
+        )
+        self._run_layer.clicked.connect(self._on_run)
 
         self.static_container = Container()
         self.dynamic_container = Container()
         self._set_widgets()
+        self.max_width = 500  #not nice to hard-code
 
     def _set_widgets(self):
         #Common widgets
@@ -108,18 +117,49 @@ class Deconvolution(Container):
             value=gpu_oi,
         )
 
+        #Airyscan layer
+        default_order = "CZYX"
         if self._image_layer_meas.value is None:
-            maxC = 1
+            airyscan = False
         else:
-            maxC = self._image_layer_meas.value.shape[0]
+            if np.ndim(self._image_layer_meas.value) >= 4:
+                airyscan = True
+                default_order = "NZCYX"
+            else:
+                airyscan = False
+
+        self._airyscan_layer = widgets.CheckBox(
+            name='airyscan',
+            value=airyscan,
+            text='Is multi-viewed data (e.g., Airyscan)',
+        )
+        self._airyscan_layer.changed.connect(self._on_airyscan_change)
+
+        self._dim_order_layer = widgets.ComboBox(
+            name='dimorder',
+            label="Dimensions order",
+            choices=["NZCYX", "NCZYX", "ZYX", "CZYX"],
+            value=self.values_from_param_file.get('dimorder', default_order),
+            visible=False,
+        )
+
+        if self._image_layer_meas.value is None:
+            maxC = 0
+        else:
+            if np.ndim(self._image_layer_meas.value) == 3:
+                maxC = 0
+            else:
+                maxC = self._image_layer_meas.value.shape[default_order.find(
+                    "C")] - 1
 
         self._coi_layer = widgets.SpinBox(
             name='coi',
             label="Reconstructed channel",
             min=0,
             value=self.values_from_param_file.get('coi', 0),
+            max=maxC,
             step=1,
-            #tooltip="",
+            tooltip="Leave at 0 if there is no channel in the data",
         )
 
         self._bg_layer = widgets.FloatSpinBox(
@@ -133,23 +173,23 @@ class Deconvolution(Container):
         self._nepoch_layer = widgets.SpinBox(
             name='Nepoch',
             label="Number of iterations",
-            value=self.values_from_param_file.get('Nepoch', 25),
+            value=self.values_from_param_file.get('Nepoch', 15),
             min=1,
             step=1,
         )
         self._disp_layer = widgets.SpinBox(
             name='disp',
             label="Display frequency",
-            value=self.values_from_param_file.get('disp', 10),
+            value=self.values_from_param_file.get('disp', 0),
             min=0,
             step=1,
         )
 
         self._method_layer = widgets.ComboBox(
-            name='method',
+            name='methods',
             label="Deconvolution method",
             choices=["RL", "GARL", "Tikhonov"],
-            value=self.values_from_param_file.get('method', "RL"),
+            value=self.values_from_param_file.get('methods', "RL"),
         )
         self._method_layer.changed.connect(self._on_method_change)
 
@@ -238,7 +278,7 @@ class Deconvolution(Container):
             ],
             label='Region of interest',
             tooltip=
-            'Lateral ROI (x,y,w,h) with (x,y) the top-left coordinates of the ROI and with (w,h) the width and height, respectively.\nNote that the Z direction is always fully considered.\nWhole field of view can be selected by setting (x,y,w,h) to (-1,-1,-1,-1).',
+            'Lateral ROI (x,y,w,h) with (x,y) the top-left coordinates of the ROI and with (w,h) the width and height, respectively.\nCenter of the stack can be selected by setting (x,y) to (-1,-1).\nNote that the Z direction is always fully considered.\nWhole field of view can be selected by setting (x,y,w,h) to (-1,-1,-1,-1).',
             visible=False,
             labels=False,
         )
@@ -273,7 +313,7 @@ class Deconvolution(Container):
             step=1,
         )
         self._psfroi_layer = Container(
-            name='psfroi',
+            name='psf_sz',
             layout='horizontal',
             widgets=[
                 self._psfroix_layer,
@@ -288,16 +328,13 @@ class Deconvolution(Container):
             labels=False,
         )
 
-        self._run_layer = widgets.PushButton(
-            name='run',
-            label='Start deconvolution',
-        )
-        self._run_layer.clicked.connect(self._on_run)
         # append into/extend the container with your widgets
         self.static_container.extend([
             self._param_layer,
             self._image_layer_meas,
             self._image_layer_psf,
+            self._airyscan_layer,
+            self._dim_order_layer,
             self._coi_layer,
             self._gpu_layer,
             self._bg_layer,
@@ -308,15 +345,23 @@ class Deconvolution(Container):
             self._roi_layer,
             self._psfroi_layer,
             self._method_layer,
-            self._run_layer,
         ])
         self.clear()
         self.extend(self.static_container)
         self.update_dynamic_layout(self._method_layer.value)
 
+    def _on_airyscan_change(self):
+        """
+        Callback function to handle Airyscan options change and update the parameters accordingly.
+        """
+        if self._airyscan_layer.value:
+            self._dim_order_layer.visible = True
+        else:
+            self._dim_order_layer.visible = False
+
     def _on_advanced_change(self):
         """
-        Callback function to handle advanved options change and update the parameters accordingly.
+        Callback function to handle advanced options change and update the parameters accordingly.
         """
         if self._advanced_layer.value:
             self._bufferwidth_layer.visible = True
@@ -332,14 +377,118 @@ class Deconvolution(Container):
         Callback function to run deconvolution
         """
         param = pd.get_param()
-        cparam = self.as_dict
-        for key, val in cparam.enumerate():
-            param[key] = val
+        param = vars(param)
+        for cwidget in self.static_container:
+            if isinstance(cwidget, Container) and len(cwidget) > 1:
+                param[cwidget.name] = tuple([cw.value for cw in cwidget])
+                if 'bufferwidth' == cwidget.name:
+                    param[cwidget.name] = param[cwidget.name][::-1]
+            elif 'path' in cwidget.name:
+                if cwidget.value is None:
+                    show_info('Please specify the PSF and the measurements')
+                    return 0
+                else:
+                    param[cwidget.name] = img_as_float(cwidget.value.data)
+            else:
+                param[cwidget.name] = cwidget.value
+        if param['datapath'].ndim == 3:
+            param['nviews'] = 1
         param['create_fname'] = lambda x, y, z: self.create_fname(
-            x, y, self._image_layer_meas.name, z)
+            x, y, self._image_layer_meas.value.name, z)
         param['save_results'] = self.save_results
-        pd.deconvolve(param)
+        param['fres'] = ''
+        param['saveMeas'] = False
+        param['methods'] = [param['methods']]
+        param['saveIter'] = (param['disp'] if param['disp'] > 0 else 1e8, )
+        param['pxsz'] = self._image_layer_meas.value.scale[-3:]
+        param['unit'] = str(self._image_layer_meas.value.units[0])
+        if param['bg'] == 0:
+            param['bg'] = 1e-9
+        if np.ndim(param['datapath']) == 3:
+            self._dim_order_layer.value = "ZYX"
+        param['datapath'] = self.select_roi(param['datapath'], param['roi'],
+                                            param['coi'],
+                                            self._dim_order_layer.value)
+        param['psfpath'] = self.select_roi(param['psfpath'], param['psf_sz'],
+                                           param['coi'],
+                                           self._dim_order_layer.value)
+
+        #add dynamic layers
+        config_meth = 'config_' + param['methods'][0]
+        param[config_meth] = dict()
+        for cwidget in self.dynamic_container:
+            cval = cwidget.value
+            if not isinstance(cwidget,
+                              widgets.Label) and cwidget.name != 'run':
+                if isinstance(cval, (float, int, str)):
+                    param[config_meth][cwidget.name] = (cval, )
+                elif isinstance(cval, pathlib.PurePath):
+                    if str(cval).lower() == 'default model':
+                        param[config_meth][cwidget.name] = ('', )
+                    elif not cval.exists():
+                        show_info(f'Folder {cval} does not exist')
+                        return 0
+                    else:
+                        param[config_meth][cwidget.name] = (str(cval), )
+                else:
+                    param[config_meth][cwidget.name] = cval
+
+        param = Namespace(**param)
+        show_info(f'Starting Deconvolution with {self._method_layer.value}...')
+        ims = pd.deconvolve(param)
+        del ims
+        cp._default_memory_pool.free_all_blocks()
         show_info(f'Deconvolution with {self._method_layer.value} done!')
+
+    def select_roi(self, data, roi, coi, dim_order):
+        """Select region of interest
+
+        Args:
+            data (numpy.ndarray): region of interest is selected from data (3,4,5D array)
+            roi (4-tuple of int): region of interest (x0,y0,w,h) with (x0,y0) top-left coordinate and (w,h) the width and height of the ROI, respectively.
+                                  If x0,y0==-1, set in such a way that the ROI is centered. If w,h=-1, set to maximize the field of view.
+            coi (int or tuple of int): channel of interest (-1 if no channel)
+        """
+
+        #reorder the dimensions to "CNZYX" (singleton dimensions are created)
+        dim_to_expand = None
+        if dim_order == "NZCYX":
+            dim_perm = (2, 0, 1, 3, 4)
+        elif dim_order == "NCZYX":
+            dim_perm = (1, 0, 2, 3, 4)
+        elif dim_order == "ZYX":
+            dim_perm = (0, 1, 2)
+            dim_to_expand = (0, 1)
+        elif dim_order == "CZYX":
+            dim_perm = (0, 1, 2, 3)
+            dim_to_expand = (1)
+
+        data = np.permute_dims(data, dim_perm)
+        if dim_to_expand != None:
+            data = np.expand_dims(data, dim_to_expand)
+
+        coi = np.array(coi)
+        hoi = np.array(np.arange(0, np.shape(data)[1]))
+        roi = np.array(roi)
+
+        if np.any(roi[2:] == None) or np.any([cr <= 0 for cr in roi[2:]]):
+            roi = np.array((0, 0, *data.shape[-2:]))
+        elif np.any(roi[:2] == None) or np.any([cr < 0 for cr in roi[:2]]):
+            # top-left coordinates taken in such way that ROI is centered
+            roi[0] = np.maximum(data.shape[-2] // 2 - roi[2] // 2, 0)
+            roi[1] = np.maximum(data.shape[-1] // 2 - roi[3] // 2, 0)
+        #make sure that ROI doesn't go out of bounds
+        roi[-2:] = np.minimum(roi[:2] + roi[-2:] - 1,
+                              np.array(data.shape[-2:]) - 1) - roi[:2] + 1
+        roi = tuple(map(int, roi))
+        out = data[
+            coi.reshape((-1, 1, 1, 1, 1)),
+            hoi.reshape((1, -1, 1, 1, 1)),
+            :,
+            roi[0]:roi[0] + roi[2],
+            roi[1]:roi[1] + roi[3],
+        ]
+        return out
 
     def save_results(self, vol, fname, pxsz, unit):
         """Add results to the Napari Viewer
@@ -351,9 +500,9 @@ class Deconvolution(Container):
             unit (str): unit of pixel size
         """
         self._viewer.add_image(
-            vol,
+            np.asarray(vol),
             name=fname,
-            scale=pxsz,
+            scale=pxsz,  #(1, pxsz[1] / pxsz[0], pxsz[2] / pxsz[0]),
             units=unit,
         )
 
@@ -429,6 +578,7 @@ class Deconvolution(Container):
         """
         Callback function to handle choice changes and update the layout accordingly.
         """
+
         self.update_dynamic_layout(self._method_layer.value)
 
     def update_dynamic_layout(self, method: str):
@@ -443,8 +593,7 @@ class Deconvolution(Container):
 
         # Clear the dynamic container's current widgets
         self.dynamic_container.clear()
-        text_widget = widgets.Label(  #value='',
-            value=f"Parameter(s) for {method}")
+        text_widget = widgets.Label(value=f"Parameter(s) for {method}")
 
         # Populate the container with different widgets based on the choice
         if method == "GARL":
@@ -462,10 +611,8 @@ class Deconvolution(Container):
                 name='model',
                 label="Trained model filepath",
                 annotation="str",
-                value=self.values_from_param_file.get(
-                    'model',
-                    '/Users/tampham/switchdrive/Private/Zeiss/trained_models/3Dtubes/'
-                ),
+                value=self.values_from_param_file.get('model',
+                                                      'default model'),
                 widget_type="FileEdit",
                 options=opts_file_edit,
             )
@@ -482,6 +629,7 @@ class Deconvolution(Container):
                 value=self.saved_values_dynamic[method].get("lmbd", 1.),
                 min=0,
                 label='Regularization parameter',
+                step=0.001,
             )
 
             sigma_widget = widgets.FloatSpinBox(
@@ -489,6 +637,7 @@ class Deconvolution(Container):
                 value=self.saved_values_dynamic[method].get("sigma", 1.),
                 min=0,
                 label="Sigma (noise level)",
+                step=0.01,
             )
             self.dynamic_container.extend([
                 text_widget,
@@ -499,32 +648,14 @@ class Deconvolution(Container):
             ])
         elif method == "Tikhonov":
             reg_widget = widgets.FloatSpinBox(
-                name='lmbd',
-                value=self.saved_values_dynamic[method].get("lmbd", 1.),
+                name='tau',
+                value=self.saved_values_dynamic[method].get("tau", 1.),
                 min=0,
                 label="Regularization parameter",
+                step=0.0001,
             )
             self.dynamic_container.extend([text_widget, reg_widget])
+
+        self.dynamic_container.extend([self._run_layer])
         self.extend(self.dynamic_container)
         self._old_method = method
-
-
-'''
-    def _threshold_im(self):
-        image_layer = self._image_layer_combo.value
-        if image_layer is None:
-            return
-
-        image = img_as_float(image_layer.data)
-        name = image_layer.name + "_thresholded"
-        threshold = self._threshold_slider.value
-        if self._invert_checkbox.value:
-            thresholded = image < threshold
-        else:
-            thresholded = image > threshold
-        if name in self._viewer.layers:
-            self._viewer.layers[name].data = thresholded
-        else:
-            self._viewer.add_labels(thresholded, name=name)
-
-'''

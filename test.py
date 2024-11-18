@@ -4,16 +4,23 @@ from napari import Viewer, run
 import os
 import tifffile
 
-foldpath = '/Users/tampham/switchdrive/Private/Zeiss/data/simulated/'
-
-psf = tifffile.imread(os.path.join(foldpath,'psf_sample_calib_nv_32_coi_2.ome.tif'))
-data = tifffile.imread(os.path.join(foldpath,'g_sample_calib_nv_32_coi_2.ome.tif'))
+data_oi = 1
+if data_oi==0:
+    foldpath = '/home/tampham/Desktop/data/simulated/'#'/Users/tampham/switchdrive/Private/Zeiss/data/simulated/'
+    psf = tifffile.imread(os.path.join(foldpath,'psf_sample_calib_nv_32_coi_2.ome.tif'))
+    data = tifffile.imread(os.path.join(foldpath,'g_sample_calib_nv_32_coi_2.ome.tif'))
+    pxsz = [1,100,35.7,35.7]
+elif data_oi==1:
+    foldpath = '/home/tampham/Desktop/3DWCR/data/real_donut/'#'/Users/tampham/switchdrive/Private/Zeiss/data/simulated/'
+    psf = tifffile.imread(os.path.join(foldpath,'psf.tif'))
+    data = tifffile.imread(os.path.join(foldpath,'data.tif'))
+    pxsz = [1,0.0794,0.0794]
 
 viewer = Viewer()
 viewer.window.resize(500,500)
 
-viewer.add_image(psf, name='PSF')
-viewer.add_image(data, name='Data')
+viewer.add_image(psf, name='PSF', scale=pxsz)
+viewer.add_image(data, name='Data', scale=pxsz)
 
 dock_widget, plugin_widget = viewer.window.add_plugin_dock_widget(
     "napari-pyxu-deconv", "Deconvolution"

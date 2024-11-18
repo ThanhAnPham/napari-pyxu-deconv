@@ -34,6 +34,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+gpu = [
+    "pyxu[complete]",
+    "pyxudeconv[gpu12]"
+]
 testing = [
     "tox",
     "pytest",  # https://docs.pytest.org/en/latest/contents.html
