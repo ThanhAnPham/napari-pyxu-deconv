@@ -35,6 +35,8 @@ if TYPE_CHECKING:
 from napari.utils.notifications import show_info
 from argparse import Namespace
 
+import gc
+import torch
 import cupy as cp
 
 NGPU = cp.cuda.runtime.getDeviceCount()
@@ -86,6 +88,7 @@ class Deconvolution(Container):
 
         self.static_container = Container()
         self.dynamic_container = Container()
+        self._maxC = 0
         self._set_widgets()
         self.max_width = 500  #not nice to hard-code
 
@@ -98,6 +101,8 @@ class Deconvolution(Container):
             annotation="napari.layers.Image",
             value=self.values_from_param_file.get('datapath', None),
         )
+        self._image_layer_meas.changed.connect(self._on_meas_change)
+
         self._image_layer_psf = create_widget(
             name='psfpath',
             label="Point-spread function",
@@ -132,32 +137,29 @@ class Deconvolution(Container):
             name='airyscan',
             value=airyscan,
             text='Is multi-viewed data (e.g., Airyscan)',
+            tooltip='Ignored if data is 3D',
         )
+
         self._airyscan_layer.changed.connect(self._on_airyscan_change)
 
         self._dim_order_layer = widgets.ComboBox(
             name='dimorder',
             label="Dimensions order",
-            choices=["NZCYX", "NCZYX", "ZYX", "CZYX"],
+            choices=["NZCYX", "NCZYX", "ZYX", "CZYX", "NZYX"],
             value=self.values_from_param_file.get('dimorder', default_order),
-            visible=False,
-        )
+            visible=True,
+            tooltip="Can be automatically determined in some cases.")
 
-        if self._image_layer_meas.value is None:
-            maxC = 0
-        else:
-            if np.ndim(self._image_layer_meas.value) == 3:
-                maxC = 0
-            else:
-                maxC = self._image_layer_meas.value.shape[default_order.find(
-                    "C")] - 1
+        self._dim_order_layer.changed.connect(self._on_metadata_change)
+
+        self.update_max_channels()
 
         self._coi_layer = widgets.SpinBox(
             name='coi',
             label="Reconstructed channel",
             min=0,
             value=self.values_from_param_file.get('coi', 0),
-            max=maxC,
+            max=self._maxC,
             step=1,
             tooltip="Leave at 0 if there is no channel in the data",
         )
@@ -166,7 +168,7 @@ class Deconvolution(Container):
             name='bg',
             label=
             "Background (minimum value).\nIf smaller than 0, automatically chosen.",
-            value=self.values_from_param_file.get('bg', 0),
+            value=self.values_from_param_file.get('bg', -1),
             min=-1,
             step=1,
         )
@@ -351,13 +353,54 @@ class Deconvolution(Container):
         self.update_dynamic_layout(self._method_layer.value)
 
     def _on_airyscan_change(self):
-        """
-        Callback function to handle Airyscan options change and update the parameters accordingly.
-        """
         if self._airyscan_layer.value:
-            self._dim_order_layer.visible = True
+            if self._image_layer_meas.value is not None:
+                ndim_meas = np.ndim(self._image_layer_meas.value)
+                if ndim_meas == 4:
+                    self._dim_order_layer.value = "NZYX"
+                #elif ndim_meas == 5:
+                #self._dim_order_layer.value = "NZCYX"
+                elif ndim_meas < 4:
+                    show_info("Not enough dimensions in measurements")
+                    self._airyscan_layer.value = False
         else:
-            self._dim_order_layer.visible = False
+            if self._image_layer_meas.value is not None:
+                ndim_meas = np.ndim(self._image_layer_meas.value)
+                if ndim_meas == 4:
+                    self._dim_order_layer.value = "CZYX"
+                elif ndim_meas == 3:
+                    self._dim_order_layer.value = "ZYX"
+            
+        self._on_metadata_change()
+
+    def _on_meas_change(self):
+        if self._image_layer_meas.value is not None:
+            ndim_meas = np.ndim(self._image_layer_meas.value)
+            if self._airyscan_layer.value:
+                if ndim_meas == 4:
+                    self._dim_order_layer.value = "NZYX"
+            else:
+                if ndim_meas == 3:
+                    self._dim_order_layer.value = "ZYX"
+                elif ndim_meas == 4:
+                    self._dim_order_layer.value = "CZYX"
+        self._on_metadata_change()
+
+    def _on_metadata_change(self):
+        self.update_max_channels()
+        self._coi_layer.max = self._maxC
+
+    def update_max_channels(self):
+        if self._image_layer_meas.value is None:
+            self._maxC = 0
+        else:
+            if np.ndim(self._image_layer_meas.value.data) == 3 or (
+                    np.ndim(self._image_layer_meas.value.data) == 4
+                    and self._airyscan_layer.value):
+                self._maxC = 0
+            else:
+                self._maxC = self._image_layer_meas.value.data.shape[
+                    self._dim_order_layer.value.find("C")] - 1
 
     def _on_advanced_change(self):
         """
@@ -402,10 +445,14 @@ class Deconvolution(Container):
         param['saveIter'] = (param['disp'] if param['disp'] > 0 else 1e8, )
         param['pxsz'] = self._image_layer_meas.value.scale[-3:]
         param['unit'] = str(self._image_layer_meas.value.units[0])
+        param['normalize_meas'] = True
         if param['bg'] == 0:
             param['bg'] = 1e-9
         if np.ndim(param['datapath']) == 3:
             self._dim_order_layer.value = "ZYX"
+        elif np.ndim(param['datapath']) == 4 and self._airyscan_layer.value:
+            self._dim_order_layer.value = "NZYX"
+
         param['datapath'] = self.select_roi(param['datapath'], param['roi'],
                                             param['coi'],
                                             self._dim_order_layer.value)
@@ -434,10 +481,13 @@ class Deconvolution(Container):
                     param[config_meth][cwidget.name] = cval
 
         param = Namespace(**param)
+        
         show_info(f'Starting Deconvolution with {self._method_layer.value}...')
         ims = pd.deconvolve(param)
         del ims
+        gc.collect()
         cp._default_memory_pool.free_all_blocks()
+        torch.cuda.empty_cache()
         show_info(f'Deconvolution with {self._method_layer.value} done!')
 
     def select_roi(self, data, roi, coi, dim_order):
@@ -462,7 +512,10 @@ class Deconvolution(Container):
         elif dim_order == "CZYX":
             dim_perm = (0, 1, 2, 3)
             dim_to_expand = (1)
-
+        elif dim_order == "NZYX":
+            dim_perm = (0, 1, 2, 3)
+            dim_to_expand = (0)
+        
         data = np.permute_dims(data, dim_perm)
         if dim_to_expand != None:
             data = np.expand_dims(data, dim_to_expand)
@@ -487,7 +540,8 @@ class Deconvolution(Container):
             :,
             roi[0]:roi[0] + roi[2],
             roi[1]:roi[1] + roi[3],
-        ]
+        ].squeeze()
+        
         return out
 
     def save_results(self, vol, fname, pxsz, unit):
