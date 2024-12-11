@@ -4,7 +4,7 @@ from napari import Viewer, run
 import os
 import tifffile
 
-data_oi = 1
+data_oi = 0
 if data_oi==0:
     foldpath = '/home/tampham/Desktop/data/simulated/'#'/Users/tampham/switchdrive/Private/Zeiss/data/simulated/'
     psf = tifffile.imread(os.path.join(foldpath,'psf_sample_calib_nv_32_coi_2.ome.tif'))

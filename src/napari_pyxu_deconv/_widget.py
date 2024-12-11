@@ -58,6 +58,9 @@ class Deconvolution(Container):
             "RL": {},
             "GARL": {},
             "Tikhonov": {},
+            "GLS": {},
+            "GKL": {},
+            "RLTV": {},
         }
         self.values_from_param_file = {}
         self._viewer = viewer  #will add the deconvolved version
@@ -190,7 +193,7 @@ class Deconvolution(Container):
         self._method_layer = widgets.ComboBox(
             name='methods',
             label="Deconvolution method",
-            choices=["RL", "GARL", "Tikhonov"],
+            choices=["RL", "GARL", "Tikhonov", "GLS", "GKL","RLTV"],
             value=self.values_from_param_file.get('methods', "RL"),
         )
         self._method_layer.changed.connect(self._on_method_change)
@@ -208,7 +211,7 @@ class Deconvolution(Container):
         self._bufferwidthx_layer = widgets.SpinBox(
             name='bufferwidthx',
             label="X",  #"Buffer width along x",
-            value=self.values_from_param_file.get('bufferwidthx', 3),
+            value=self.values_from_param_file.get('bufferwidthx', 15),
             min=0,
             step=1,
         )
@@ -216,7 +219,7 @@ class Deconvolution(Container):
         self._bufferwidthy_layer = widgets.SpinBox(
             name='bufferwidthy',
             label="Y",  #"Buffer width along y",
-            value=self.values_from_param_file.get('bufferwidthy', 3),
+            value=self.values_from_param_file.get('bufferwidthy', 15),
             min=0,
             step=1,
         )
@@ -224,7 +227,7 @@ class Deconvolution(Container):
         self._bufferwidthz_layer = widgets.SpinBox(
             name='bufferwidthz',
             label="Z",
-            value=self.values_from_param_file.get('bufferwidthz', 1),
+            value=self.values_from_param_file.get('bufferwidthz', 15),
             min=0,
             step=1,
         )
@@ -239,6 +242,7 @@ class Deconvolution(Container):
             ],
             label='Buffer width',
             visible=False,
+            tooltip='The volume is reconstructed with a larger size to allow contribution from outside the measured area.',
         )
         # ROI
         self._roix_layer = widgets.SpinBox(
@@ -370,7 +374,7 @@ class Deconvolution(Container):
                     self._dim_order_layer.value = "CZYX"
                 elif ndim_meas == 3:
                     self._dim_order_layer.value = "ZYX"
-            
+
         self._on_metadata_change()
 
     def _on_meas_change(self):
@@ -481,7 +485,7 @@ class Deconvolution(Container):
                     param[config_meth][cwidget.name] = cval
 
         param = Namespace(**param)
-        
+
         show_info(f'Starting Deconvolution with {self._method_layer.value}...')
         ims = pd.deconvolve(param)
         del ims
@@ -515,7 +519,7 @@ class Deconvolution(Container):
         elif dim_order == "NZYX":
             dim_perm = (0, 1, 2, 3)
             dim_to_expand = (0)
-        
+
         data = np.permute_dims(data, dim_perm)
         if dim_to_expand != None:
             data = np.expand_dims(data, dim_to_expand)
@@ -541,7 +545,7 @@ class Deconvolution(Container):
             roi[0]:roi[0] + roi[2],
             roi[1]:roi[1] + roi[3],
         ].squeeze()
-        
+
         return out
 
     def save_results(self, vol, fname, pxsz, unit):
@@ -650,9 +654,35 @@ class Deconvolution(Container):
         text_widget = widgets.Label(value=f"Parameter(s) for {method}")
 
         # Populate the container with different widgets based on the choice
-        if method == "GARL":
+        if method == "RL":
+            accel_widget = widgets.CheckBox(
+                name='acceleration',
+                value=True,
+                text='Accelerated algorithm',
+                tooltip=
+                "Results may differ a bit from the non-accelerated version. The expected acceleration is roughly 2-3 times faster.",
+            )
+            self.dynamic_container.extend([accel_widget])
+        if method == "RLTV":
+            reg_widget = widgets.FloatSpinBox(
+                name="tau",
+                value=self.saved_values_dynamic[method].get("tau", 5e-1),
+                min=0,
+                label='Regularization parameter',
+                tooltip="Higher value means stronger regularization",
+                step=0.0001,
+            )
+            accel_widget = widgets.CheckBox(
+                name='acceleration',
+                value=True,
+                text='Accelerated algorithm',
+                tooltip=
+                "Results may differ a bit from the non-accelerated version. The expected acceleration is roughly 2-3 times faster.",
+            )
+            self.dynamic_container.extend([reg_widget, accel_widget])
+        if method == "GARL" or method == "GLS" or method == "GKL":
             #TODO: Add a possibility to do ranged values?
-            #TODO: Will save the parameters in JSON file somewhere so that pyxudeconv can load it.
+            #TODO: save the parameters in JSON file somewhere so that pyxudeconv can load it.
             #TODO: Add a possibility to load a JSON file?
 
             opts_file_edit = {
@@ -680,18 +710,27 @@ class Deconvolution(Container):
             )
             reg_widget = widgets.FloatSpinBox(
                 name="lmbd",
-                value=self.saved_values_dynamic[method].get("lmbd", 1.),
+                value=self.saved_values_dynamic[method].get("lmbd", 5e-1),
                 min=0,
                 label='Regularization parameter',
-                step=0.001,
+                tooltip="Higher value means stronger regularization",
+                step=0.0001,
             )
 
             sigma_widget = widgets.FloatSpinBox(
                 name='sigma',
-                value=self.saved_values_dynamic[method].get("sigma", 1.),
+                value=self.saved_values_dynamic[method].get("sigma", 5.),
                 min=0,
-                label="Sigma (noise level)",
+                label="Sigma",
+                tooltip="Related to noise level. Higher value means stronger regularization.",
                 step=0.01,
+            )
+            accel_widget = widgets.CheckBox(
+                name='acceleration',
+                value=True,
+                text='Accelerated algorithm',
+                tooltip=
+                "Results may differ a bit from the non-accelerated version. The expected acceleration is roughly 2-3 times faster.",
             )
             self.dynamic_container.extend([
                 text_widget,
@@ -699,6 +738,7 @@ class Deconvolution(Container):
                 epochoi_widget,
                 reg_widget,
                 sigma_widget,
+                accel_widget,
             ])
         elif method == "Tikhonov":
             reg_widget = widgets.FloatSpinBox(
