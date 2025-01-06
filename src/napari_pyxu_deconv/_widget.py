@@ -97,7 +97,15 @@ class Deconvolution(Container):
 
     def _set_widgets(self):
         #Common widgets
-
+        if NGPU > 0:
+            default_method = "GARL"
+        else:
+            default_method = "RL"
+        if default_method == "RL":
+            default_nepoch = 30
+        else:
+            default_nepoch = 100
+            
         self._image_layer_meas = create_widget(
             name='datapath',
             label="Measurements",
@@ -128,7 +136,7 @@ class Deconvolution(Container):
         #Airyscan layer
         default_order = "CZYX"
         if self._image_layer_meas.value is None:
-            airyscan = False
+            airyscan = True
         else:
             if np.ndim(self._image_layer_meas.value) >= 4:
                 airyscan = True
@@ -175,10 +183,11 @@ class Deconvolution(Container):
             min=-1,
             step=1,
         )
+
         self._nepoch_layer = widgets.SpinBox(
             name='Nepoch',
             label="Number of iterations",
-            value=self.values_from_param_file.get('Nepoch', 15),
+            value=self.values_from_param_file.get('Nepoch', default_nepoch),
             min=1,
             step=1,
         )
@@ -193,8 +202,8 @@ class Deconvolution(Container):
         self._method_layer = widgets.ComboBox(
             name='methods',
             label="Deconvolution method",
-            choices=["RL", "GARL", "Tikhonov", "GLS", "GKL","RLTV"],
-            value=self.values_from_param_file.get('methods', "RL"),
+            choices=["RL", "GARL", "Tikhonov", "GLS", "GKL", "RLTV"],
+            value=self.values_from_param_file.get('methods', default_method),
         )
         self._method_layer.changed.connect(self._on_method_change)
 
@@ -242,7 +251,8 @@ class Deconvolution(Container):
             ],
             label='Buffer width',
             visible=False,
-            tooltip='The volume is reconstructed with a larger size to allow contribution from outside the measured area.',
+            tooltip=
+            'The volume is reconstructed with a larger size to allow contribution from outside the measured area.',
         )
         # ROI
         self._roix_layer = widgets.SpinBox(
@@ -710,7 +720,7 @@ class Deconvolution(Container):
             )
             reg_widget = widgets.FloatSpinBox(
                 name="lmbd",
-                value=self.saved_values_dynamic[method].get("lmbd", 5e-1),
+                value=self.saved_values_dynamic[method].get("lmbd", 2.5e-1),
                 min=0,
                 label='Regularization parameter',
                 tooltip="Higher value means stronger regularization",
@@ -722,7 +732,8 @@ class Deconvolution(Container):
                 value=self.saved_values_dynamic[method].get("sigma", 5.),
                 min=0,
                 label="Sigma",
-                tooltip="Related to noise level. Higher value means stronger regularization.",
+                tooltip=
+                "Related to noise level. Higher value means stronger regularization.",
                 step=0.01,
             )
             accel_widget = widgets.CheckBox(

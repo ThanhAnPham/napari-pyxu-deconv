@@ -6,12 +6,12 @@ import tifffile
 
 data_oi = 0
 if data_oi==0:
-    foldpath = '/home/tampham/Desktop/data/simulated/'#'/Users/tampham/switchdrive/Private/Zeiss/data/simulated/'
-    psf = tifffile.imread(os.path.join(foldpath,'psf_sample_calib_nv_32_coi_2.ome.tif'))
-    data = tifffile.imread(os.path.join(foldpath,'g_sample_calib_nv_32_coi_2.ome.tif'))
+    foldpath = '/data/tampham/simulated/'#'/Users/tampham/switchdrive/Private/Zeiss/data/simulated/'
+    psf = tifffile.imread(os.path.join(foldpath,'psf_sample_calib_nv_32_coi_2_n_0.001_2.5_bg_0.0001.ome.tif'))
+    data = tifffile.imread(os.path.join(foldpath,'g_sample_calib_nv_32_coi_2_n_0.001_2.5_bg_0.0001.ome.tif'))
     pxsz = [1,100,35.7,35.7]
 elif data_oi==1:
-    foldpath = '/home/tampham/Desktop/3DWCR/data/real_donut/'#'/Users/tampham/switchdrive/Private/Zeiss/data/simulated/'
+    foldpath = '/data/tampham/real_donut/'#'/Users/tampham/switchdrive/Private/Zeiss/data/simulated/'
     psf = tifffile.imread(os.path.join(foldpath,'psf.tif'))
     data = tifffile.imread(os.path.join(foldpath,'data.tif'))
     pxsz = [1,0.0794,0.0794]
