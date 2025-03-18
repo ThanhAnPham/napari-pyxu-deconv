@@ -7,11 +7,10 @@
 [![codecov](https://codecov.io/gh/ThanhAnPham/napari-pyxu-deconv/branch/main/graph/badge.svg)](https://codecov.io/gh/ThanhAnPham/napari-pyxu-deconv)
 [![napari hub](https://img.shields.io/endpoint?url=https://api.napari-hub.org/shields/napari-pyxu-deconv)](https://napari-hub.org/plugins/napari-pyxu-deconv)
 
-3D Deconvolution with Pyxu library
+Napari Plugin for 3D Deconvolution with Pyxu library (pyxudeconv)
 
 ----------------------------------
 
-This [napari] plugin was generated with [copier] using the [napari-plugin-template].
 
 <!--
 Don't miss the full getting started guide to set up your new package:
@@ -21,7 +20,7 @@ and review the napari docs for plugin developers:
 https://napari.org/stable/plugins/index.html
 -->
 
-## Installation
+## Installation (Not ready yet)
 
 You can install `napari-pyxu-deconv` via [pip]:
 
